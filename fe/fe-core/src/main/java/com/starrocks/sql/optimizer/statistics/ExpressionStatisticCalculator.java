@@ -735,7 +735,8 @@ public class ExpressionStatisticCalculator {
             if (fmtArg.isPresent()) {
                 final var fmtString = fmtArg.get().getVarchar().toLowerCase();
                 final Optional<Long> estimatedNdv;
-                if (dateStatistic.getMinValue() != NEGATIVE_INFINITY && dateStatistic.getMaxValue() != POSITIVE_INFINITY) {
+                if (!dateStatistic.hasNaNValue() && dateStatistic.getMinValue() != NEGATIVE_INFINITY
+                        && dateStatistic.getMaxValue() != POSITIVE_INFINITY) {
                     final var minDateTime = Utils.getDatetimeFromLong((long) dateStatistic.getMinValue());
                     final var maxDateTime = Utils.getDatetimeFromLong((long) dateStatistic.getMaxValue());
                     final var truncatedMinDateTime = truncateDateValue(fmtString, minDateTime, callOperator.getType());
@@ -837,18 +838,7 @@ public class ExpressionStatisticCalculator {
         }
 
         private Optional<Long> estimateDateTruncDistinctValues(String fmt) {
-            final long maxYear = ConstantOperator.MAX_DATETIME.getYear() - ConstantOperator.MIN_DATETIME.getYear();
-
-            return switch (fmt) {
-                case FunctionSet.YEAR -> Optional.of(maxYear);
-                case FunctionSet.QUARTER -> Optional.of(maxYear * 4L);
-                case FunctionSet.MONTH -> Optional.of(maxYear * 12L);
-                case FunctionSet.WEEK -> Optional.of(maxYear * 52L);
-                case FunctionSet.DAY -> Optional.of(maxYear * 365L);
-                case FunctionSet.HOUR -> Optional.of(maxYear * 365L * 24L);
-                // Do not estimate for more precise truncations, since the upper bound NDV would be very high.
-                default -> Optional.empty();
-            };
+            return estimateDateTruncDistinctValues(fmt, ConstantOperator.MIN_DATETIME, ConstantOperator.MAX_DATETIME);
         }
 
         private long quarterOrdinal(LocalDateTime dateTime) {

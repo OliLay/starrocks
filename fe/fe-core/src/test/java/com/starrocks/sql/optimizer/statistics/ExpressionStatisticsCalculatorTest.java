@@ -1328,13 +1328,13 @@ public class ExpressionStatisticsCalculatorTest {
 
     @Test
     public void testDateTruncFallbackStatistics() {
-        // Infinite range, NDV capped at max possible buckets
-        assertDateTruncFallbackStatistics("year", 100_000, 9999);
-        assertDateTruncFallbackStatistics("quarter", 100_000, 9999L * 4);
-        assertDateTruncFallbackStatistics("month", 200_000, 9999L * 12);
-        assertDateTruncFallbackStatistics("week", 1_000_000, 9999L * 52);
-        assertDateTruncFallbackStatistics("day", 10_000_000, 9999L * 365);
-        assertDateTruncFallbackStatistics("hour", 100_000_000, 9999L * 365 * 24);
+        // Infinite range, NDV capped at max possible values
+        assertDateTruncFallbackStatistics("year", 100_000, 10000);
+        assertDateTruncFallbackStatistics("quarter", 100_000, 40000);
+        assertDateTruncFallbackStatistics("month", 200_000, 120000);
+        assertDateTruncFallbackStatistics("week", 1_000_000, 521775);
+        assertDateTruncFallbackStatistics("day", 10_000_000, 3652425);
+        assertDateTruncFallbackStatistics("hour", 100_000_000, 87658200);
 
         // Minute/second fallback too precise, NDV preserved from input
         assertDateTruncFallbackStatistics("minute", 500, 500);
