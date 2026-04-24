@@ -29,6 +29,7 @@ import com.starrocks.sql.optimizer.operator.scalar.ConstantOperator;
 import com.starrocks.sql.optimizer.operator.scalar.IsNullPredicateOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperatorVisitor;
+import com.starrocks.sql.optimizer.rewrite.ScalarOperatorFunctions;
 import com.starrocks.sql.spm.SPMFunctions;
 import com.starrocks.type.Type;
 import com.starrocks.type.VarcharType;
@@ -40,6 +41,7 @@ import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.IsoFields;
 import java.util.Collections;
 import java.util.HashMap;
@@ -48,6 +50,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.stream.Collectors;
+
+import static java.lang.Double.NEGATIVE_INFINITY;
+import static java.lang.Double.POSITIVE_INFINITY;
 
 public class ExpressionStatisticCalculator {
     private static final Logger LOG = LogManager.getLogger(ExpressionStatisticCalculator.class);
@@ -705,6 +710,8 @@ public class ExpressionStatisticCalculator {
                     maxValue = 1;
                     distinctValues = 2;
                     break;
+                case FunctionSet.DATE_TRUNC:
+                    return calculateDateTruncStats(callOperator, right);
                 default:
                     return ColumnStatistic.unknown();
             }
@@ -716,6 +723,140 @@ public class ExpressionStatisticCalculator {
                     .setDistinctValuesCount(distinctValues);
             transformHistogramForBinary(callOperator, left, right).ifPresent(builder::setHistogram);
             return builder.build();
+        }
+
+        private ColumnStatistic calculateDateTruncStats(CallOperator callOperator, ColumnStatistic dateStatistic) {
+            final var fmtArg = toConstantOperator(callOperator.getChild(0));
+            double minValue = dateStatistic.getMinValue();
+            double maxValue = dateStatistic.getMaxValue();
+            double distinctValues = dateStatistic.getDistinctValuesCount();
+
+            Histogram transformedHistogram = null;
+            if (fmtArg.isPresent()) {
+                final var fmtString = fmtArg.get().getVarchar().toLowerCase();
+                final Optional<Long> estimatedNdv;
+                if (dateStatistic.getMinValue() != NEGATIVE_INFINITY && dateStatistic.getMaxValue() != POSITIVE_INFINITY) {
+                    final var minDateTime = Utils.getDatetimeFromLong((long) dateStatistic.getMinValue());
+                    final var maxDateTime = Utils.getDatetimeFromLong((long) dateStatistic.getMaxValue());
+                    final var truncatedMinDateTime = truncateDateValue(fmtString, minDateTime, callOperator.getType());
+                    final var truncatedMaxDateTime = truncateDateValue(fmtString, maxDateTime, callOperator.getType());
+
+                    if (truncatedMinDateTime.isPresent() && truncatedMaxDateTime.isPresent()) {
+                        minValue = Utils.getLongFromDateTime(truncatedMinDateTime.get());
+                        maxValue = Utils.getLongFromDateTime(truncatedMaxDateTime.get());
+                        estimatedNdv = estimateDateTruncDistinctValues(fmtString, truncatedMinDateTime.get(),
+                                truncatedMaxDateTime.get());
+                    } else {
+                        // Fallback if we could not truncate the min or max value.
+                        estimatedNdv = estimateDateTruncDistinctValues(fmtString);
+                    }
+                } else {
+                    // Fallback if we do not have min/max stats.
+                    estimatedNdv = estimateDateTruncDistinctValues(fmtString);
+                }
+
+                if (estimatedNdv.isPresent()) {
+                    distinctValues = Math.min(dateStatistic.getDistinctValuesCount(), estimatedNdv.get());
+                }
+
+                transformedHistogram = transformHistogramForDateTrunc(fmtString, dateStatistic, callOperator.getType());
+            }
+
+            return ColumnStatistic.buildFrom(dateStatistic)
+                    .setMinValue(minValue)
+                    .setMaxValue(maxValue)
+                    .setDistinctValuesCount(distinctValues)
+                    .setHistogram(transformedHistogram)
+                    .build();
+        }
+
+        private Histogram transformHistogramForDateTrunc(String fmtString, ColumnStatistic dateStatistic,
+                                                         Type resultType) {
+            final var histogram = dateStatistic.getHistogram();
+            if (histogram == null || histogram.getMCV() == null || histogram.getMCV().isEmpty()) {
+                return null;
+            }
+
+            Map<String, Long> newMcv = new HashMap<>();
+            for (final var entry : histogram.getMCV().entrySet()) {
+                // Parse MCV key string back to a date/datetime constant
+                final var parsedKey = ConstantOperator.createVarchar(entry.getKey()).castTo(resultType);
+                if (parsedKey.isEmpty() || parsedKey.get().isNull()) {
+                    return null;
+                }
+
+                // Apply date_trunc
+                final var truncatedKey = truncateDateValue(fmtString, parsedKey.get().getDatetime(), resultType);
+                if (truncatedKey.isEmpty()) {
+                    return null;
+                }
+
+                // Convert truncated value back to string key
+                final var truncatedKeyString = ConstantOperator.createDatetime(truncatedKey.get(), resultType)
+                        .castTo(VarcharType.VARCHAR);
+                if (truncatedKeyString.isEmpty()) {
+                    return null;
+                }
+
+                newMcv.merge(truncatedKeyString.get().getVarchar(), entry.getValue(), Long::sum);
+            }
+
+            return new Histogram(Collections.emptyList(), newMcv);
+        }
+
+        private Optional<LocalDateTime> truncateDateValue(String fmt, LocalDateTime value, Type resultType) {
+            try {
+                final var truncatedValue = ScalarOperatorFunctions.dateTrunc(ConstantOperator.createVarchar(fmt),
+                        ConstantOperator.createDatetime(value, resultType));
+                if (truncatedValue == null || truncatedValue.isNull()) {
+                    return Optional.empty();
+                }
+                return Optional.of(truncatedValue.getDatetime());
+            } catch (IllegalArgumentException e) {
+                return Optional.empty();
+            }
+        }
+
+        private Optional<Long> estimateDateTruncDistinctValues(String fmt, LocalDateTime minDateTime, LocalDateTime maxDateTime) {
+            Optional<Long> distinctValues = Optional.empty();
+            distinctValues = switch (fmt) {
+                case FunctionSet.YEAR -> Optional.of(maxDateTime.getYear() - minDateTime.getYear() + 1L);
+                case FunctionSet.QUARTER -> Optional.of(quarterOrdinal(maxDateTime) - quarterOrdinal(minDateTime) + 1L);
+                case FunctionSet.MONTH -> Optional.of(monthOrdinal(maxDateTime) - monthOrdinal(minDateTime) + 1L);
+                case FunctionSet.WEEK ->
+                        Optional.of(ChronoUnit.WEEKS.between(minDateTime.toLocalDate(), maxDateTime.toLocalDate()) + 1L);
+                case FunctionSet.DAY ->
+                        Optional.of(ChronoUnit.DAYS.between(minDateTime.toLocalDate(), maxDateTime.toLocalDate()) + 1L);
+                case FunctionSet.HOUR -> Optional.of(ChronoUnit.HOURS.between(minDateTime, maxDateTime) + 1L);
+                case FunctionSet.MINUTE -> Optional.of(ChronoUnit.MINUTES.between(minDateTime, maxDateTime) + 1L);
+                case FunctionSet.SECOND -> Optional.of(ChronoUnit.SECONDS.between(minDateTime, maxDateTime) + 1L);
+                // Do not estimate for more precise truncations, since the upper bound NDV would be very high.
+                default -> distinctValues;
+            };
+            return distinctValues;
+        }
+
+        private Optional<Long> estimateDateTruncDistinctValues(String fmt) {
+            final long maxYear = ConstantOperator.MAX_DATETIME.getYear() - ConstantOperator.MIN_DATETIME.getYear();
+
+            return switch (fmt) {
+                case FunctionSet.YEAR -> Optional.of(maxYear);
+                case FunctionSet.QUARTER -> Optional.of(maxYear * 4L);
+                case FunctionSet.MONTH -> Optional.of(maxYear * 12L);
+                case FunctionSet.WEEK -> Optional.of(maxYear * 52L);
+                case FunctionSet.DAY -> Optional.of(maxYear * 365L);
+                case FunctionSet.HOUR -> Optional.of(maxYear * 365L * 24L);
+                // Do not estimate for more precise truncations, since the upper bound NDV would be very high.
+                default -> Optional.empty();
+            };
+        }
+
+        private long quarterOrdinal(LocalDateTime dateTime) {
+            return dateTime.getYear() * 4L + (dateTime.getMonthValue() - 1L) / 3L;
+        }
+
+        private long monthOrdinal(LocalDateTime dateTime) {
+            return dateTime.getYear() * 12L + dateTime.getMonthValue();
         }
 
         private ColumnStatistic multiaryExpressionCalculate(CallOperator callOperator,
