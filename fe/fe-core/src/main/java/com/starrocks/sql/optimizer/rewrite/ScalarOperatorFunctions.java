@@ -405,6 +405,10 @@ public class ScalarOperatorFunctions {
 
         } else {
             switch (fmt.getVarchar()) {
+                case "microsecond":
+                    return ConstantOperator.createDatetimeOrNull(date.getDatetime().truncatedTo(ChronoUnit.MICROS));
+                case "millisecond":
+                    return ConstantOperator.createDatetimeOrNull(date.getDatetime().truncatedTo(ChronoUnit.MILLIS));
                 case "second":
                     return ConstantOperator.createDatetimeOrNull(date.getDatetime().truncatedTo(ChronoUnit.SECONDS));
                 case "minute":

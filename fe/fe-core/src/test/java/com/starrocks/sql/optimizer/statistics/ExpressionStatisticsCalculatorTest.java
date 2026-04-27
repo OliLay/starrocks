@@ -1275,6 +1275,27 @@ public class ExpressionStatisticsCalculatorTest {
                 LocalDateTime.of(2024, 1, 15, 10, 20, 32),
                 3);
 
+        // DATETIME millisecond — StarRocks DATETIME is second-precision, so truncation is a
+        // no-op.
+        assertDateTruncStatistics(
+                DateType.DATETIME, "millisecond",
+                LocalDateTime.of(2024, 1, 15, 10, 20, 30),
+                LocalDateTime.of(2024, 1, 15, 10, 20, 32),
+                1000, 0.25,
+                LocalDateTime.of(2024, 1, 15, 10, 20, 30),
+                LocalDateTime.of(2024, 1, 15, 10, 20, 32),
+                1000);
+
+        // DATETIME microsecond — same reasoning as millisecond above
+        assertDateTruncStatistics(
+                DateType.DATETIME, "microsecond",
+                LocalDateTime.of(2024, 1, 15, 10, 20, 30),
+                LocalDateTime.of(2024, 1, 15, 10, 20, 32),
+                1000, 0.25,
+                LocalDateTime.of(2024, 1, 15, 10, 20, 30),
+                LocalDateTime.of(2024, 1, 15, 10, 20, 32),
+                1000);
+
         // DATE year
         assertDateTruncStatistics(
                 DateType.DATE, "year",
@@ -1336,9 +1357,11 @@ public class ExpressionStatisticsCalculatorTest {
         assertDateTruncFallbackStatistics("day", 10_000_000, 3652425);
         assertDateTruncFallbackStatistics("hour", 100_000_000, 87658200);
 
-        // Minute/second fallback too precise, NDV preserved from input
+        // Minute/second/millisecond/microsecond fallback too precise, NDV preserved from input
         assertDateTruncFallbackStatistics("minute", 500, 500);
         assertDateTruncFallbackStatistics("second", 500, 500);
+        assertDateTruncFallbackStatistics("millisecond", 500, 500);
+        assertDateTruncFallbackStatistics("microsecond", 500, 500);
 
         // Input NDV smaller than max, stays at input NDV
         assertDateTruncFallbackStatistics("year", 10, 10);
@@ -1457,6 +1480,47 @@ public class ExpressionStatisticsCalculatorTest {
 
         // THEN
         Assertions.assertNull(result.getHistogram());
+    }
+
+    @Test
+    public void testDateTruncMcvPropagationWithMillisecondAndMicrosecond() {
+        // GIVEN — StarRocks DATETIME is second-precision, so millisecond/microsecond
+        // truncation is identity. This test verifies MCVs are preserved
+        final var col = new ColumnRefOperator(0, DateType.DATETIME, "dt", true);
+        final var inputMcv = Map.of(
+                "2024-01-15 10:20:30", 100L,
+                "2024-01-15 10:20:31", 200L
+        );
+        final var colStat = ColumnStatistic.builder()
+                .setDistinctValuesCount(500)
+                .setHistogram(new Histogram(Collections.emptyList(), inputMcv))
+                .build();
+        final var statistics = Statistics.builder()
+                .setOutputRowCount(5000)
+                .addColumnStatistic(col, colStat)
+                .build();
+
+        // WHEN millisecond — identity for whole-second values, MCVs preserved
+        final var msCall = new CallOperator(FunctionSet.DATE_TRUNC, DateType.DATETIME,
+                Lists.newArrayList(ConstantOperator.createVarchar("millisecond"), col));
+        final var msResult = ExpressionStatisticCalculator.calculate(msCall, statistics);
+
+        // THEN
+        Assertions.assertNotNull(msResult.getHistogram());
+        Assertions.assertEquals(2, msResult.getHistogram().getMCV().size());
+        Assertions.assertEquals(100L, msResult.getHistogram().getMCV().get("2024-01-15 10:20:30"));
+        Assertions.assertEquals(200L, msResult.getHistogram().getMCV().get("2024-01-15 10:20:31"));
+
+        // WHEN
+        final var usCall = new CallOperator(FunctionSet.DATE_TRUNC, DateType.DATETIME,
+                Lists.newArrayList(ConstantOperator.createVarchar("microsecond"), col));
+        final var usResult = ExpressionStatisticCalculator.calculate(usCall, statistics);
+
+        // THEN
+        Assertions.assertNotNull(usResult.getHistogram());
+        Assertions.assertEquals(2, usResult.getHistogram().getMCV().size());
+        Assertions.assertEquals(100L, usResult.getHistogram().getMCV().get("2024-01-15 10:20:30"));
+        Assertions.assertEquals(200L, usResult.getHistogram().getMCV().get("2024-01-15 10:20:31"));
     }
 
     @Test
