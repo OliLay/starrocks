@@ -42,6 +42,9 @@ public class VirtualColumnStats extends PrimitiveTypeColumnStats {
 
     @Override
     public String getQuotedColumnName() {
+        if (!virtualStatistic.requiresLateralJoin()) {
+            return virtualStatistic.getVirtualExpression(baseColumnName);
+        }
         return "`" + getColumnNameStr() + "`";
     }
 

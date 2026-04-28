@@ -28,6 +28,15 @@ public class VirtualPrimitiveTypeColumnStats extends PrimitiveTypeColumnStats {
     }
 
     @Override
+    public String getQuotedColumnName() {
+        if (!virtualStatistic.requiresLateralJoin()) {
+            // For scalar expressions, use the expression directly (e.g. upper(`col`))
+            return virtualStatistic.getVirtualExpression(baseColumnName);
+        }
+        return super.getQuotedColumnName();
+    }
+
+    @Override
     public String getLateralJoin() {
         if (virtualStatistic.requiresLateralJoin()) {
             return ", %s `%s`(`%s`)".formatted(virtualStatistic.getVirtualExpression(baseColumnName), columnName, columnName);

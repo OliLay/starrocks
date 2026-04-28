@@ -354,13 +354,15 @@ public class FullStatisticsCollectJob extends StatisticsCollectJob {
         String quoteColumnExpression = virtualStat.getVirtualExpression(columnName);
         Type virtualType = virtualStat.getVirtualExpressionType(columnType);
 
-        var laterals = "";
         if (virtualStat.requiresLateralJoin()) {
-            laterals = ", " + quoteColumnExpression + " $columnNameStr(`column_key`)";
+            var laterals = ", " + quoteColumnExpression + " $columnNameStr(`column_key`)";
+            return buildBatchCollectStatisticSQL(table, partition, columnNameStr, "column_key",
+                    virtualType, laterals);
+        } else {
+            // For scalar expressions, use the expression directly in the FROM subquery SELECT
+            return buildBatchCollectStatisticSQL(table, partition, columnNameStr, quoteColumnExpression,
+                    virtualType, "");
         }
-
-        return buildBatchCollectStatisticSQL(table, partition, columnNameStr, "column_key",
-                virtualType, laterals);
     }
 
     private String buildBatchCollectStatisticSQL(Table table, Partition partition, String columnNameStr,
