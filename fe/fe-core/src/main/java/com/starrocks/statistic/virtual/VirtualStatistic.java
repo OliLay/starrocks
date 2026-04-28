@@ -15,11 +15,15 @@
 package com.starrocks.statistic.virtual;
 
 import com.google.common.base.CharMatcher;
+import com.starrocks.type.PrimitiveType;
 import com.starrocks.type.Type;
+import com.starrocks.type.VarcharType;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Represents a virtual statistic that is derived from an existing column.
@@ -29,7 +33,12 @@ import java.util.Optional;
 public interface VirtualStatistic {
 
     UnnestStatistic UNNEST = new UnnestStatistic();
-    List<VirtualStatistic> INSTANCES = List.of(UNNEST);
+
+    DynamicExpressionStatistic UPPER = new DynamicExpressionStatistic(
+            "UPPER", "upper(`%s`)", VarcharType.VARCHAR,
+            Set.of(PrimitiveType.VARCHAR, PrimitiveType.CHAR), false);
+
+    List<VirtualStatistic> INSTANCES = new CopyOnWriteArrayList<>(List.of(UNNEST, UPPER));
 
     /**
      * Used as name prefix for virtual entries in the stats table.

@@ -18,9 +18,11 @@ package com.starrocks.sql.optimizer.statistics;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.starrocks.catalog.FunctionSet;
+import com.starrocks.server.GlobalStateMgr;
 import com.starrocks.sql.ast.expression.LargeIntLiteral;
 import com.starrocks.sql.optimizer.ConstantOperatorUtils;
 import com.starrocks.sql.optimizer.Utils;
+import com.starrocks.sql.optimizer.base.ColumnRefFactory;
 import com.starrocks.sql.optimizer.operator.scalar.CallOperator;
 import com.starrocks.sql.optimizer.operator.scalar.CaseWhenOperator;
 import com.starrocks.sql.optimizer.operator.scalar.CastOperator;
@@ -29,6 +31,7 @@ import com.starrocks.sql.optimizer.operator.scalar.ConstantOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperator;
 import com.starrocks.sql.optimizer.operator.scalar.ScalarOperatorVisitor;
 import com.starrocks.sql.spm.SPMFunctions;
+import com.starrocks.statistic.virtual.VirtualStatistic;
 import com.starrocks.type.Type;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -57,21 +60,28 @@ public class ExpressionStatisticCalculator {
     }
 
     public static ColumnStatistic calculate(ScalarOperator operator, Statistics input, double rowCount) {
+        return calculate(operator, input, rowCount, null);
+    }
+
+    public static ColumnStatistic calculate(ScalarOperator operator, Statistics input, double rowCount,
+                                            ColumnRefFactory columnRefFactory) {
         if (Double.isNaN(rowCount)) {
             LOG.debug("found a NaN row count when calculating column statistic for expr: {}", operator);
             return ColumnStatistic.unknown();
         }
-        return operator.accept(new ExpressionStatisticVisitor(input, rowCount), null);
+        return operator.accept(new ExpressionStatisticVisitor(input, rowCount, columnRefFactory), null);
     }
 
     private static class ExpressionStatisticVisitor extends ScalarOperatorVisitor<ColumnStatistic, Void> {
         private final Statistics inputStatistics;
         // Some functions estimate need plan node row count, such as COUNT
         private final double rowCount;
+        private final ColumnRefFactory columnRefFactory;
 
-        public ExpressionStatisticVisitor(Statistics statistics, double rowCount) {
+        public ExpressionStatisticVisitor(Statistics statistics, double rowCount, ColumnRefFactory columnRefFactory) {
             this.inputStatistics = statistics;
             this.rowCount = Math.max(1.0, rowCount);
+            this.columnRefFactory = columnRefFactory;
         }
 
         @Override
@@ -186,6 +196,16 @@ public class ExpressionStatisticCalculator {
 
         @Override
         public ColumnStatistic visitCall(CallOperator call, Void context) {
+            // Try to use collected virtual statistics for scalar expressions
+            if (columnRefFactory != null && call.getChildren().size() == 1
+                    && call.getChild(0) instanceof ColumnRefOperator) {
+                ColumnRefOperator colRef = (ColumnRefOperator) call.getChild(0);
+                Optional<ColumnStatistic> virtualStat = tryLoadVirtualStatistic(call.getFnName(), colRef);
+                if (virtualStat.isPresent()) {
+                    return virtualStat.get();
+                }
+            }
+
             List<ColumnStatistic> childrenColumnStatistics =
                     call.getChildren().stream().map(child -> child.accept(this, context)).collect(Collectors.toList());
             Preconditions.checkState(childrenColumnStatistics.size() == call.getChildren().size(),
@@ -209,6 +229,31 @@ public class ExpressionStatisticCalculator {
             } else {
                 return multiaryExpressionCalculate(call, childrenColumnStatistics);
             }
+        }
+
+        private Optional<ColumnStatistic> tryLoadVirtualStatistic(String fnName, ColumnRefOperator colRef) {
+            var tableAndColumn = columnRefFactory.getTableAndColumn(colRef);
+            if (tableAndColumn == null || tableAndColumn.first == null) {
+                return Optional.empty();
+            }
+            var table = tableAndColumn.first;
+            String baseColumnName = colRef.getName();
+
+            for (VirtualStatistic virtualStat : VirtualStatistic.INSTANCES) {
+                if (!virtualStat.isQueryingEnabled()) {
+                    continue;
+                }
+                if (virtualStat.getName().equalsIgnoreCase(fnName)) {
+                    String virtualColumnName = virtualStat.getVirtualColumnName(baseColumnName);
+                    ColumnStatistic stat = GlobalStateMgr.getCurrentState()
+                            .getStatisticStorage()
+                            .getColumnStatistic(table, virtualColumnName);
+                    if (!stat.isUnknown()) {
+                        return Optional.of(stat);
+                    }
+                }
+            }
+            return Optional.empty();
         }
 
         private ColumnStatistic nullaryExpressionCalculate(CallOperator callOperator) {
