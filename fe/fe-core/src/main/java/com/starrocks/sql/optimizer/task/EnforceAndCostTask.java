@@ -330,12 +330,23 @@ public class EnforceAndCostTask extends OptimizerTask implements Cloneable {
 
     private void setSatisfiedPropertyWithCost(PhysicalPropertySet outputProperty,
                                               List<PhysicalPropertySet> childrenOutputProperties) {
+        double outputPropertyCost = calculateTotalCostWithRequiredProperty(outputProperty, childrenOutputProperties);
         // groupExpression can satisfy its own output property
-        setPropertyWithCost(groupExpression, outputProperty, childrenOutputProperties);
+        setPropertyWithCost(groupExpression, outputProperty, childrenOutputProperties, outputPropertyCost);
         if (outputProperty.getCteProperty().isEmpty()) {
+            double emptyPropertyCost =
+                    calculateTotalCostWithRequiredProperty(PhysicalPropertySet.EMPTY, childrenOutputProperties);
             // groupExpression can satisfy the ANY type output property
-            setPropertyWithCost(groupExpression, outputProperty, PhysicalPropertySet.EMPTY, childrenOutputProperties);
+            setPropertyWithCost(groupExpression, outputProperty, PhysicalPropertySet.EMPTY, childrenOutputProperties,
+                    emptyPropertyCost);
         }
+    }
+
+    private double calculateTotalCostWithRequiredProperty(PhysicalPropertySet requiredProperty,
+                                                          List<PhysicalPropertySet> childrenOutputProperties) {
+        double adjustedLocalCost = CostModel.calculateCostWithChildrenOutProperty(groupExpression,
+                childrenOutputProperties, requiredProperty);
+        return curTotalCost - localCost + adjustedLocalCost;
     }
 
     private void recordCostsAndEnforce(PhysicalPropertySet outputProperty,
@@ -445,13 +456,21 @@ public class EnforceAndCostTask extends OptimizerTask implements Cloneable {
                                      PhysicalPropertySet outputProperty,
                                      PhysicalPropertySet requiredProperty,
                                      List<PhysicalPropertySet> childrenOutputProperties) {
-        if (groupExpression.updatePropertyWithCost(requiredProperty, childrenOutputProperties, curTotalCost)) {
+        setPropertyWithCost(groupExpression, outputProperty, requiredProperty, childrenOutputProperties, curTotalCost);
+    }
+
+    private void setPropertyWithCost(GroupExpression groupExpression,
+                                     PhysicalPropertySet outputProperty,
+                                     PhysicalPropertySet requiredProperty,
+                                     List<PhysicalPropertySet> childrenOutputProperties,
+                                     double totalCost) {
+        if (groupExpression.updatePropertyWithCost(requiredProperty, childrenOutputProperties, totalCost)) {
             // Each group expression need to record the outputProperty satisfy what requiredProperty,
             // because group expression can generate multi outputProperty. eg. Join may have shuffle local
             // and shuffle join two types outputProperty.
             groupExpression.setOutputPropertySatisfyRequiredProperty(outputProperty, requiredProperty);
         }
-        this.groupExpression.getGroup().setBestExpression(groupExpression, curTotalCost, requiredProperty);
+        this.groupExpression.getGroup().setBestExpression(groupExpression, totalCost, requiredProperty);
     }
 
     private void recordPlanEnumInfo(GroupExpression groupExpression, PhysicalPropertySet outputProperty,
@@ -465,8 +484,9 @@ public class EnforceAndCostTask extends OptimizerTask implements Cloneable {
 
     private void setPropertyWithCost(GroupExpression groupExpression,
                                      PhysicalPropertySet requiredProperty,
-                                     List<PhysicalPropertySet> childrenOutputProperties) {
-        setPropertyWithCost(groupExpression, requiredProperty, requiredProperty, childrenOutputProperties);
+                                     List<PhysicalPropertySet> childrenOutputProperties,
+                                     double totalCost) {
+        setPropertyWithCost(groupExpression, requiredProperty, requiredProperty, childrenOutputProperties, totalCost);
     }
 
     private PhysicalPropertySet enforceProperty(PhysicalPropertySet outputProperty,
