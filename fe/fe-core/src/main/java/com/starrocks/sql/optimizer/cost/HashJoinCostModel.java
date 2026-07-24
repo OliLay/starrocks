@@ -18,10 +18,11 @@ import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.RunMode;
 import com.starrocks.sql.ast.JoinOperator;
 import com.starrocks.sql.optimizer.ExpressionContext;
+import com.starrocks.sql.optimizer.JoinHelper;
+import com.starrocks.sql.optimizer.PropertyDeriverBase;
 import com.starrocks.sql.optimizer.base.ColumnRefSet;
 import com.starrocks.sql.optimizer.base.DistributionCol;
 import com.starrocks.sql.optimizer.base.DistributionProperty;
-import com.starrocks.sql.optimizer.base.DistributionSpec;
 import com.starrocks.sql.optimizer.base.HashDistributionDesc;
 import com.starrocks.sql.optimizer.base.HashDistributionSpec;
 import com.starrocks.sql.optimizer.base.PhysicalPropertySet;
@@ -214,31 +215,17 @@ public class HashJoinCostModel {
     }
 
     private boolean shuffleJoinOutputSatisfyRequiredProperty() {
-        List<DistributionCol> leftJoinColumns = getLeftJoinColumns();
-        if (leftJoinColumns.isEmpty()) {
+        JoinHelper joinHelper = JoinHelper.of(joinOperator, context.getChildOutputColumns(0),
+                context.getChildOutputColumns(1));
+        List<DistributionCol> leftJoinColumns = joinHelper.getLeftCols();
+        List<DistributionCol> rightJoinColumns = joinHelper.getRightCols();
+        if (leftJoinColumns.isEmpty() || rightJoinColumns.isEmpty()) {
             return false;
         }
 
-        DistributionSpec shuffleJoinDistribution = DistributionSpec.createHashDistributionSpec(
-                new HashDistributionDesc(leftJoinColumns, HashDistributionDesc.SourceType.SHUFFLE_JOIN));
-        PhysicalPropertySet shuffleJoinOutputProperty =
-                new PhysicalPropertySet(DistributionProperty.createProperty(shuffleJoinDistribution));
+        PhysicalPropertySet shuffleJoinOutputProperty = PropertyDeriverBase.computeShuffleJoinOutputProperty(
+                joinOperator.getJoinType(), requiredProperty, leftJoinColumns, rightJoinColumns);
         return shuffleJoinOutputProperty.getDistributionProperty().isSatisfy(requiredProperty.getDistributionProperty());
-    }
-
-    private List<DistributionCol> getLeftJoinColumns() {
-        ColumnRefSet leftColumns = context.getChildOutputColumns(0);
-        return eqOnPredicates.stream()
-                .map(predicate -> {
-                    ScalarOperator firstChild = predicate.getChild(0);
-                    ScalarOperator secondChild = predicate.getChild(1);
-                    return leftColumns.containsAll(firstChild.getUsedColumns()) ? firstChild : secondChild;
-                })
-                .filter(ScalarOperator::isColumnRef)
-                .map(column -> (ColumnRefOperator) column)
-                .filter(leftColumns::contains)
-                .map(column -> new DistributionCol(column.getId(), true))
-                .toList();
     }
 
     private double getPreservedDistributionCost() {

@@ -449,33 +449,8 @@ public class OutputPropertyDeriver extends PropertyDeriverBase<PhysicalPropertyS
     private PhysicalPropertySet computeShuffleJoinOutputProperty(JoinOperator joinType,
                                                                  List<DistributionCol> leftShuffleColumns,
                                                                  List<DistributionCol> rightShuffleColumns) {
-        Optional<HashDistributionDesc> requiredShuffleDesc = getRequiredShuffleDesc();
-        if (!requiredShuffleDesc.isPresent()) {
-            return PhysicalPropertySet.EMPTY;
-        }
-
-        // Get required properties for children.
-        List<PhysicalPropertySet> requiredProperties =
-                computeShuffleJoinRequiredProperties(requirements, leftShuffleColumns, rightShuffleColumns);
-        checkState(requiredProperties.size() == 2);
-
-        List<DistributionCol> dominatedOutputColumns;
-
-        if (joinType.isRightJoin()) {
-            dominatedOutputColumns = ((HashDistributionSpec) requiredProperties.get(1).getDistributionProperty().getSpec())
-                    .getShuffleColumns();
-        } else if (joinType.isFullOuterJoin()) {
-            dominatedOutputColumns = ((HashDistributionSpec) requiredProperties.get(0).getDistributionProperty().getSpec())
-                    .getShuffleColumns();
-            dominatedOutputColumns = dominatedOutputColumns.stream().map(e -> e.getNullRelaxCol()).collect(Collectors.toList());
-        } else {
-            dominatedOutputColumns = ((HashDistributionSpec) requiredProperties.get(0).getDistributionProperty().getSpec())
-                    .getShuffleColumns();
-        }
-        HashDistributionSpec outputShuffleDistribution = DistributionSpec.createHashDistributionSpec(
-                new HashDistributionDesc(dominatedOutputColumns, SHUFFLE_JOIN));
-
-        return createPropertySetByDistribution(outputShuffleDistribution);
+        return PropertyDeriverBase.computeShuffleJoinOutputProperty(joinType, requirements,
+                leftShuffleColumns, rightShuffleColumns);
     }
 
     private Optional<HashDistributionDesc> getRequiredShuffleDesc() {

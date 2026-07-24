@@ -17,6 +17,7 @@ package com.starrocks.sql.optimizer;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
+import com.starrocks.sql.ast.JoinOperator;
 import com.starrocks.sql.optimizer.base.DistributionCol;
 import com.starrocks.sql.optimizer.base.DistributionProperty;
 import com.starrocks.sql.optimizer.base.DistributionSpec;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static com.starrocks.sql.optimizer.base.HashDistributionDesc.SourceType.SHUFFLE_AGG;
 import static com.starrocks.sql.optimizer.base.HashDistributionDesc.SourceType.SHUFFLE_JOIN;
 
 public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
@@ -72,6 +74,49 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
                 return createShuffleJoinRequiredProperties(leftShuffleColumns, rightShuffleColumns);
             }
         }
+    }
+
+    public static PhysicalPropertySet computeShuffleJoinOutputProperty(
+            JoinOperator joinType, PhysicalPropertySet requiredFromParent,
+            List<DistributionCol> leftShuffleColumns, List<DistributionCol> rightShuffleColumns) {
+        if (!canDeriveShuffleJoinOutputProperty(requiredFromParent)) {
+            return PhysicalPropertySet.EMPTY;
+        }
+
+        List<PhysicalPropertySet> requiredProperties =
+                computeShuffleJoinRequiredProperties(requiredFromParent, leftShuffleColumns, rightShuffleColumns);
+        Preconditions.checkState(requiredProperties.size() == 2);
+
+        List<DistributionCol> dominatedOutputColumns;
+        if (joinType.isRightJoin()) {
+            dominatedOutputColumns = getShuffleColumns(requiredProperties.get(1));
+        } else if (joinType.isFullOuterJoin()) {
+            dominatedOutputColumns = getShuffleColumns(requiredProperties.get(0)).stream()
+                    .map(DistributionCol::getNullRelaxCol)
+                    .collect(Collectors.toList());
+        } else {
+            dominatedOutputColumns = getShuffleColumns(requiredProperties.get(0));
+        }
+
+        HashDistributionSpec outputShuffleDistribution = DistributionSpec.createHashDistributionSpec(
+                new HashDistributionDesc(dominatedOutputColumns, SHUFFLE_JOIN));
+        return new PhysicalPropertySet(DistributionProperty.createProperty(outputShuffleDistribution));
+    }
+
+    private static boolean canDeriveShuffleJoinOutputProperty(PhysicalPropertySet requiredFromParent) {
+        if (!requiredFromParent.getDistributionProperty().isShuffle()) {
+            return false;
+        }
+
+        HashDistributionDesc requireDistributionDesc =
+                ((HashDistributionSpec) requiredFromParent.getDistributionProperty()
+                        .getSpec()).getHashDistributionDesc();
+        HashDistributionDesc.SourceType requiredType = requireDistributionDesc.getSourceType();
+        return requiredType == SHUFFLE_JOIN || requiredType == SHUFFLE_AGG;
+    }
+
+    private static List<DistributionCol> getShuffleColumns(PhysicalPropertySet propertySet) {
+        return ((HashDistributionSpec) propertySet.getDistributionProperty().getSpec()).getShuffleColumns();
     }
 
     public static List<PhysicalPropertySet> computeShuffleSetRequiredProperties(PhysicalSetOperation node) {
