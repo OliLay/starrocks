@@ -16,7 +16,6 @@ package com.starrocks.sql.optimizer.cost;
 
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.RunMode;
-import com.starrocks.sql.ast.JoinOperator;
 import com.starrocks.sql.optimizer.ExpressionContext;
 import com.starrocks.sql.optimizer.JoinHelper;
 import com.starrocks.sql.optimizer.PropertyDeriverBase;
@@ -148,74 +147,66 @@ public class HashJoinCostModel {
 
     public double getNetworkCost() {
         JoinExecMode execMode = deriveJoinExecMode();
-        if (!canAdjustForPreservedLeftDistribution()) {
+        // Shuffle can destroy a distribution that broadcast would preserve. Hence, we penalize a shuffle if
+        // we could preserve the distribution through a broadcast instead.
+        if (JoinExecMode.SHUFFLE != execMode || !couldPreserveLeftSideDistribution()) {
             return 0;
         }
 
-        // Broadcast can preserve a useful probe-side distribution that shuffle join would replace.
-        boolean shuffleOutputSatisfyRequired = shuffleJoinOutputSatisfyRequiredProperty();
-        double preservedDistributionCost = getPreservedDistributionCost();
-        if (JoinExecMode.BROADCAST == execMode && !shuffleOutputSatisfyRequired) {
-            return -preservedDistributionCost;
+        if (!shuffleJoinOutputSatisfiesRequiredDistribution()) {
+            // Estimate the cost to restore the parent-required distribution after a shuffle destroys it.
+            return joinStatistics.getOutputSize(context.getRootProperty().getOutputColumns());
         }
-
-        if (JoinExecMode.SHUFFLE == execMode && !inputProperties.get(0).getDistributionProperty()
-                .isSatisfy(requiredProperty.getDistributionProperty())) {
-            return preservedDistributionCost;
-        }
-
         return 0;
     }
 
-    private boolean canAdjustForPreservedLeftDistribution() {
+    private boolean couldPreserveLeftSideDistribution() {
         if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2 || requiredProperty == null) {
             return false;
         }
 
+        // Join hints override the cost model's decision.
         String joinHint = joinOperator.getJoinHint();
         if (joinHint != null && !joinHint.isEmpty()) {
             return false;
         }
 
-        long broadcastRowCountLimit = ConnectContext.get().getSessionVariable().getBroadcastRowCountLimit();
-        if (broadcastRowCountLimit <= 0 || rightStatistics.getOutputRowCount() <= broadcastRowCountLimit) {
-            return false;
-        }
-
-        JoinOperator joinType = joinOperator.getJoinType();
+        final var joinType = joinOperator.getJoinType();
         if (!joinType.isLeftTransform()) {
             return false;
         }
 
-        DistributionProperty requiredDistribution = requiredProperty.getDistributionProperty();
+        // The parent requires either a shuffle join or a shuffle agg.
+        final var requiredDistribution = requiredProperty.getDistributionProperty();
         if (!requiredDistribution.isShuffle()) {
             return false;
         }
-
-        HashDistributionDesc.SourceType requiredType =
-                ((HashDistributionSpec) requiredDistribution.getSpec()).getHashDistributionDesc().getSourceType();
+        final var requiredType = ((HashDistributionSpec) requiredDistribution.getSpec())
+                .getHashDistributionDesc().getSourceType();
         if (requiredType != HashDistributionDesc.SourceType.SHUFFLE_JOIN &&
                 requiredType != HashDistributionDesc.SourceType.SHUFFLE_AGG) {
             return false;
         }
 
+        // The parent requires the same distribution as the left child.
         if (!requiredDistributionColumnsFromLeftChild(requiredDistribution)) {
             return false;
         }
 
+        // The current distribution is the actual desired distribution.
         return inputProperties.get(0).getDistributionProperty().isSatisfy(requiredDistribution);
     }
 
     private boolean requiredDistributionColumnsFromLeftChild(DistributionProperty requiredDistribution) {
-        HashDistributionSpec requiredSpec = (HashDistributionSpec) requiredDistribution.getSpec();
-        ColumnRefSet leftColumns = context.getChildOutputColumns(0);
+        final var requiredSpec = (HashDistributionSpec) requiredDistribution.getSpec();
+        final var leftColumns = context.getChildOutputColumns(0);
         return requiredSpec.getShuffleColumns().stream()
                 .map(DistributionCol::getColId)
                 .allMatch(leftColumns::contains);
     }
 
-    private boolean shuffleJoinOutputSatisfyRequiredProperty() {
-        JoinHelper joinHelper = JoinHelper.of(joinOperator, context.getChildOutputColumns(0),
+    private boolean shuffleJoinOutputSatisfiesRequiredDistribution() {
+        final var joinHelper = JoinHelper.of(joinOperator, context.getChildOutputColumns(0),
                 context.getChildOutputColumns(1));
         List<DistributionCol> leftJoinColumns = joinHelper.getLeftCols();
         List<DistributionCol> rightJoinColumns = joinHelper.getRightCols();
@@ -223,14 +214,11 @@ public class HashJoinCostModel {
             return false;
         }
 
-        PhysicalPropertySet shuffleJoinOutputProperty = PropertyDeriverBase.computeShuffleJoinOutputProperty(
+        final var shuffleJoinOutputProperty = PropertyDeriverBase.computeShuffleJoinOutputProperty(
                 joinOperator.getJoinType(), requiredProperty, leftJoinColumns, rightJoinColumns);
         return shuffleJoinOutputProperty.getDistributionProperty().isSatisfy(requiredProperty.getDistributionProperty());
     }
 
-    private double getPreservedDistributionCost() {
-        return Math.max(joinStatistics.getOutputSize(context.getRootProperty().getOutputColumns()), 1);
-    }
 
     private double getAvgProbeCost() {
         JoinExecMode execMode = deriveJoinExecMode();
