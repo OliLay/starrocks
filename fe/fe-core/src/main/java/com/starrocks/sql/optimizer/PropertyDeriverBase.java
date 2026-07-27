@@ -79,7 +79,7 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
     public static PhysicalPropertySet computeShuffleJoinOutputProperty(
             JoinOperator joinType, PhysicalPropertySet requiredFromParent,
             List<DistributionCol> leftShuffleColumns, List<DistributionCol> rightShuffleColumns) {
-        if (!canDeriveShuffleJoinOutputProperty(requiredFromParent)) {
+        if (!getRequiredShuffleDesc(requiredFromParent).isPresent()) {
             return PhysicalPropertySet.EMPTY;
         }
 
@@ -103,16 +103,20 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
         return new PhysicalPropertySet(DistributionProperty.createProperty(outputShuffleDistribution));
     }
 
-    private static boolean canDeriveShuffleJoinOutputProperty(PhysicalPropertySet requiredFromParent) {
-        if (!requiredFromParent.getDistributionProperty().isShuffle()) {
-            return false;
+    protected static Optional<HashDistributionDesc> getRequiredShuffleDesc(PhysicalPropertySet requiredPropertySet) {
+        if (!requiredPropertySet.getDistributionProperty().isShuffle()) {
+            return Optional.empty();
         }
 
         HashDistributionDesc requireDistributionDesc =
-                ((HashDistributionSpec) requiredFromParent.getDistributionProperty()
+                ((HashDistributionSpec) requiredPropertySet.getDistributionProperty()
                         .getSpec()).getHashDistributionDesc();
         HashDistributionDesc.SourceType requiredType = requireDistributionDesc.getSourceType();
-        return requiredType == SHUFFLE_JOIN || requiredType == SHUFFLE_AGG;
+        if (requiredType != SHUFFLE_JOIN && requiredType != SHUFFLE_AGG) {
+            return Optional.empty();
+        }
+
+        return Optional.of(requireDistributionDesc);
     }
 
     private static List<DistributionCol> getShuffleColumns(PhysicalPropertySet propertySet) {
@@ -141,17 +145,8 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
 
     protected static Optional<HashDistributionDesc> getShuffleJoinHashDistributionDesc(
             PhysicalPropertySet requiredPropertySet) {
-        if (!requiredPropertySet.getDistributionProperty().isShuffle()) {
-            return Optional.empty();
-        }
-        HashDistributionDesc requireDistributionDesc =
-                ((HashDistributionSpec) requiredPropertySet.getDistributionProperty()
-                        .getSpec()).getHashDistributionDesc();
-        if (SHUFFLE_JOIN != requireDistributionDesc.getSourceType()) {
-            return Optional.empty();
-        }
-
-        return Optional.of(requireDistributionDesc);
+        return getRequiredShuffleDesc(requiredPropertySet)
+                .filter(desc -> SHUFFLE_JOIN == desc.getSourceType());
     }
 
     private static List<PhysicalPropertySet> createShuffleJoinRequiredProperties(List<DistributionCol> leftColumns,

@@ -91,7 +91,6 @@ import java.util.stream.IntStream;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.starrocks.sql.optimizer.base.HashDistributionDesc.SourceType.LOCAL;
-import static com.starrocks.sql.optimizer.base.HashDistributionDesc.SourceType.SHUFFLE_AGG;
 import static com.starrocks.sql.optimizer.base.HashDistributionDesc.SourceType.SHUFFLE_JOIN;
 
 // The output property of the node is calculated according to the attributes of the child node and itself.
@@ -161,7 +160,7 @@ public class OutputPropertyDeriver extends PropertyDeriverBase<PhysicalPropertyS
         if (leftTableId == rightTableId && !colocateIndex.isSameGroup(leftTableId, rightTableId)) {
             return createPropertySetByDistribution(dominatedOutputSpec);
         } else {
-            Optional<HashDistributionDesc> requiredShuffleDesc = getRequiredShuffleDesc();
+            Optional<HashDistributionDesc> requiredShuffleDesc = getRequiredShuffleDesc(requirements);
             if (!requiredShuffleDesc.isPresent()) {
                 return createPropertySetByDistribution(dominatedOutputSpec);
             }
@@ -422,7 +421,8 @@ public class OutputPropertyDeriver extends PropertyDeriverBase<PhysicalPropertyS
 
             } else if (leftDistributionDesc.isShuffleLike() && rightDistributionDesc.isShuffleLike()) {
                 // shuffle join
-                PhysicalPropertySet outputProperty = computeShuffleJoinOutputProperty(node.getJoinType(),
+                PhysicalPropertySet outputProperty = PropertyDeriverBase.computeShuffleJoinOutputProperty(
+                        node.getJoinType(), requirements,
                         leftDistributionDesc.getDistributionCols(), rightDistributionDesc.getDistributionCols());
                 return updateEquivalentDescriptor(node, outputProperty,
                         leftOnPredicateColumns, rightOnPredicateColumns);
@@ -444,29 +444,6 @@ public class OutputPropertyDeriver extends PropertyDeriverBase<PhysicalPropertyS
                 "Children output property distribution error. left=" + leftProperty
                         + ", right=" + rightProperty,
                 ErrorType.INTERNAL_ERROR);
-    }
-
-    private PhysicalPropertySet computeShuffleJoinOutputProperty(JoinOperator joinType,
-                                                                 List<DistributionCol> leftShuffleColumns,
-                                                                 List<DistributionCol> rightShuffleColumns) {
-        return PropertyDeriverBase.computeShuffleJoinOutputProperty(joinType, requirements,
-                leftShuffleColumns, rightShuffleColumns);
-    }
-
-    private Optional<HashDistributionDesc> getRequiredShuffleDesc() {
-        if (!requirements.getDistributionProperty().isShuffle()) {
-            return Optional.empty();
-        }
-
-        HashDistributionDesc requireDistributionDesc =
-                ((HashDistributionSpec) requirements.getDistributionProperty().getSpec()).getHashDistributionDesc();
-        HashDistributionDesc.SourceType requiredType = requireDistributionDesc.getSourceType();
-
-        if (SHUFFLE_JOIN == requiredType || SHUFFLE_AGG == requiredType) {
-            return Optional.of(requireDistributionDesc);
-        }
-
-        return Optional.empty();
     }
 
     @Override
