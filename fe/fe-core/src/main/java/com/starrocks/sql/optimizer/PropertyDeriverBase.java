@@ -79,27 +79,34 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
     public static PhysicalPropertySet computeShuffleJoinOutputProperty(
             JoinOperator joinType, PhysicalPropertySet requiredFromParent,
             List<DistributionCol> leftShuffleColumns, List<DistributionCol> rightShuffleColumns) {
-        if (!getRequiredShuffleDesc(requiredFromParent).isPresent()) {
+        Optional<HashDistributionDesc> requiredShuffleDesc = getRequiredShuffleDesc(requiredFromParent);
+        if (!requiredShuffleDesc.isPresent()) {
             return PhysicalPropertySet.EMPTY;
         }
 
+        // Get required properties for children.
         List<PhysicalPropertySet> requiredProperties =
                 computeShuffleJoinRequiredProperties(requiredFromParent, leftShuffleColumns, rightShuffleColumns);
         Preconditions.checkState(requiredProperties.size() == 2);
 
         List<DistributionCol> dominatedOutputColumns;
+
         if (joinType.isRightJoin()) {
-            dominatedOutputColumns = getShuffleColumns(requiredProperties.get(1));
+            dominatedOutputColumns = ((HashDistributionSpec) requiredProperties.get(1).getDistributionProperty()
+                    .getSpec()).getShuffleColumns();
         } else if (joinType.isFullOuterJoin()) {
-            dominatedOutputColumns = getShuffleColumns(requiredProperties.get(0)).stream()
-                    .map(DistributionCol::getNullRelaxCol)
+            dominatedOutputColumns = ((HashDistributionSpec) requiredProperties.get(0).getDistributionProperty()
+                    .getSpec()).getShuffleColumns();
+            dominatedOutputColumns = dominatedOutputColumns.stream().map(e -> e.getNullRelaxCol())
                     .collect(Collectors.toList());
         } else {
-            dominatedOutputColumns = getShuffleColumns(requiredProperties.get(0));
+            dominatedOutputColumns = ((HashDistributionSpec) requiredProperties.get(0).getDistributionProperty()
+                    .getSpec()).getShuffleColumns();
         }
 
         HashDistributionSpec outputShuffleDistribution = DistributionSpec.createHashDistributionSpec(
                 new HashDistributionDesc(dominatedOutputColumns, SHUFFLE_JOIN));
+
         return new PhysicalPropertySet(DistributionProperty.createProperty(outputShuffleDistribution));
     }
 
@@ -112,15 +119,11 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
                 ((HashDistributionSpec) requiredPropertySet.getDistributionProperty()
                         .getSpec()).getHashDistributionDesc();
         HashDistributionDesc.SourceType requiredType = requireDistributionDesc.getSourceType();
-        if (requiredType != SHUFFLE_JOIN && requiredType != SHUFFLE_AGG) {
-            return Optional.empty();
+
+        if (SHUFFLE_JOIN == requiredType || SHUFFLE_AGG == requiredType) {
+            return Optional.of(requireDistributionDesc);
         }
-
-        return Optional.of(requireDistributionDesc);
-    }
-
-    private static List<DistributionCol> getShuffleColumns(PhysicalPropertySet propertySet) {
-        return ((HashDistributionSpec) propertySet.getDistributionProperty().getSpec()).getShuffleColumns();
+        return Optional.empty();
     }
 
     public static List<PhysicalPropertySet> computeShuffleSetRequiredProperties(PhysicalSetOperation node) {
@@ -141,12 +144,19 @@ public abstract class PropertyDeriverBase<R, C> extends OperatorVisitor<R, C> {
         return requiredProperties;
     }
 
-
-
     protected static Optional<HashDistributionDesc> getShuffleJoinHashDistributionDesc(
             PhysicalPropertySet requiredPropertySet) {
-        return getRequiredShuffleDesc(requiredPropertySet)
-                .filter(desc -> SHUFFLE_JOIN == desc.getSourceType());
+        if (!requiredPropertySet.getDistributionProperty().isShuffle()) {
+            return Optional.empty();
+        }
+        HashDistributionDesc requireDistributionDesc =
+                ((HashDistributionSpec) requiredPropertySet.getDistributionProperty()
+                        .getSpec()).getHashDistributionDesc();
+        if (SHUFFLE_JOIN != requireDistributionDesc.getSourceType()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(requireDistributionDesc);
     }
 
     private static List<PhysicalPropertySet> createShuffleJoinRequiredProperties(List<DistributionCol> leftColumns,
