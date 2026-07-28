@@ -752,11 +752,16 @@ public class ReplayFromDumpTest extends ReplayFromDumpTestBase {
 
     @Test
     public void testLocalAggDistributionMismatchBroadcastJoinFromDump() throws Exception {
-        String dumpString = getDumpInfoFromFile("query_dump/local_agg_distribution_mismatch_broadcast_join");
-        QueryDumpInfo queryDumpInfo = getDumpInfoFromJson(dumpString);
+        // GIVEN
+        final var dumpString = getDumpInfoFromFile("query_dump/local_agg_distribution_mismatch_broadcast_join");
+        final var queryDumpInfo = getDumpInfoFromJson(dumpString);
+        // Validate that the input dump does not already contain a broadcast join hint
         Assertions.assertFalse(queryDumpInfo.getOriginStmt().contains("[BROADCAST]"));
 
+        // WHEN
         Pair<QueryDumpInfo, String> replayPair = getCostPlanFragment(dumpString, queryDumpInfo.getSessionVariable());
+
+        // THEN
         String plan = replayPair.second;
         String targetJoinConjunct = "mock_2023";
         String joinBlock = Stream.of(plan.split("(?m)(?=^\\s*\\d+:)"))

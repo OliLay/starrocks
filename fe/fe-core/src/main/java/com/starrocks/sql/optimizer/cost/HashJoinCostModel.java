@@ -21,7 +21,6 @@ import com.starrocks.sql.optimizer.JoinHelper;
 import com.starrocks.sql.optimizer.PropertyDeriverBase;
 import com.starrocks.sql.optimizer.base.ColumnRefSet;
 import com.starrocks.sql.optimizer.base.DistributionCol;
-import com.starrocks.sql.optimizer.base.DistributionProperty;
 import com.starrocks.sql.optimizer.base.HashDistributionDesc;
 import com.starrocks.sql.optimizer.base.HashDistributionSpec;
 import com.starrocks.sql.optimizer.base.PhysicalPropertySet;
@@ -148,18 +147,16 @@ public class HashJoinCostModel {
     public double getNetworkCost() {
         // Redistribution can destroy a distribution that broadcast would preserve.
         // We penalize redistribution if we can make use of the current distribution later on.
-        if (preservesLeftDistribution() || !couldPreserveLeftSideDistribution()) {
+        if (preservesLeftDistribution() || !couldPreserveLeftSideDistribution() || joinOutputSatisfiesRequiredDistribution()) {
             return 0;
         }
 
         // Only penalize cases where we would destroy the upcoming required distribution.
-        if (!joinOutputSatisfiesRequiredDistribution()) {
-            // Estimate the cost to restore the parent-required distribution after a shuffle destroys it.
-            return joinStatistics.getOutputSize(context.getRootProperty().getOutputColumns());
-        }
-        return 0;
+        // Estimate the cost to restore the parent-required distribution after a shuffle destroys it.
+        return joinStatistics.getOutputSize(context.getRootProperty().getOutputColumns());
     }
 
+    /* Whether the current join method preserves the left-side distribution after the join. */
     private boolean preservesLeftDistribution() {
         if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2) {
             return false;
@@ -170,6 +167,7 @@ public class HashJoinCostModel {
         return leftSpec.preservesLeftJoinSideDistribution(rightSpec);
     }
 
+    /* Whether we can actually preserve the left side distribution, based on the current join and the downstream distribution. */
     private boolean couldPreserveLeftSideDistribution() {
         if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2 || requiredProperty == null) {
             return false;
@@ -186,7 +184,7 @@ public class HashJoinCostModel {
             return false;
         }
 
-        // The parent requires either a shuffle join or a shuffle agg.
+        // Downstream requires either a shuffle join or a shuffle agg.
         final var requiredDistribution = requiredProperty.getDistributionProperty();
         if (!requiredDistribution.isShuffle()) {
             return false;
@@ -198,17 +196,18 @@ public class HashJoinCostModel {
             return false;
         }
 
-        // The parent requires the same distribution as the left child.
-        if (!requiredDistributionColumnsFromLeftChild(requiredDistribution)) {
+        // Make sure downstream requires columns from the left-side that we could preserve.
+        if (!requiredDistributionUsesOnlyLeftChildColumns()) {
             return false;
         }
 
-        // The current distribution is the actual desired distribution.
+        // We can satisfy that downstream requires the same distribution as the current left child.
         return inputProperties.get(0).getDistributionProperty().isSatisfy(requiredDistribution);
     }
 
-    private boolean requiredDistributionColumnsFromLeftChild(DistributionProperty requiredDistribution) {
-        final var requiredSpec = (HashDistributionSpec) requiredDistribution.getSpec();
+    /* Whether the given required distribution only uses columns from the current join's left child. */
+    private boolean requiredDistributionUsesOnlyLeftChildColumns() {
+        final var requiredSpec = (HashDistributionSpec) requiredProperty.getDistributionProperty().getSpec();
         final var leftColumns = context.getChildOutputColumns(0);
         return requiredSpec.getShuffleColumns().stream()
                 .map(DistributionCol::getColId)
@@ -218,8 +217,8 @@ public class HashJoinCostModel {
     private boolean joinOutputSatisfiesRequiredDistribution() {
         final var joinHelper = JoinHelper.of(joinOperator, context.getChildOutputColumns(0),
                 context.getChildOutputColumns(1));
-        List<DistributionCol> leftJoinColumns = joinHelper.getLeftCols();
-        List<DistributionCol> rightJoinColumns = joinHelper.getRightCols();
+        final var leftJoinColumns = joinHelper.getLeftCols();
+        final var rightJoinColumns = joinHelper.getRightCols();
         if (leftJoinColumns.isEmpty() || rightJoinColumns.isEmpty()) {
             return false;
         }
