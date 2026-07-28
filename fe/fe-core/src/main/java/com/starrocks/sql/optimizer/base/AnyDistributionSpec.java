@@ -29,8 +29,8 @@ public class AnyDistributionSpec extends DistributionSpec {
     }
 
     @Override
-    public boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec) {
-        return rightSpec.type == DistributionType.BROADCAST || rightSpec.type == DistributionType.GATHER;
+    public boolean preservesChildDistribution(DistributionSpec otherSpec) {
+        return otherSpec.type == DistributionType.BROADCAST || otherSpec.type == DistributionType.GATHER;
     }
 
     @Override

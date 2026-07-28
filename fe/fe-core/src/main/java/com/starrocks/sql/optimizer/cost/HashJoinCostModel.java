@@ -17,10 +17,12 @@ package com.starrocks.sql.optimizer.cost;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.server.RunMode;
 import com.starrocks.sql.optimizer.ExpressionContext;
+import com.starrocks.sql.optimizer.Group;
 import com.starrocks.sql.optimizer.JoinHelper;
 import com.starrocks.sql.optimizer.PropertyDeriverBase;
 import com.starrocks.sql.optimizer.base.ColumnRefSet;
 import com.starrocks.sql.optimizer.base.DistributionCol;
+import com.starrocks.sql.optimizer.base.DistributionProperty;
 import com.starrocks.sql.optimizer.base.HashDistributionDesc;
 import com.starrocks.sql.optimizer.base.HashDistributionSpec;
 import com.starrocks.sql.optimizer.base.PhysicalPropertySet;
@@ -146,8 +148,10 @@ public class HashJoinCostModel {
 
     public double getNetworkCost() {
         // Redistribution can destroy a distribution that broadcast would preserve.
-        // We penalize redistribution if we can make use of the current distribution later on.
-        if (preservesLeftDistribution() || !couldPreserveLeftSideDistribution() || joinOutputSatisfiesRequiredDistribution()) {
+        // We model the cost of redistribution if we can make use of the current distribution later on.
+        final var getJoinChildInfo = getJoinChildInfo();
+        if (getJoinChildInfo == null || preservesChildDistribution(getJoinChildInfo) ||
+                !couldPreserveChildDistribution(getJoinChildInfo) || joinOutputSatisfiesRequiredDistribution()) {
             return 0;
         }
 
@@ -156,31 +160,50 @@ public class HashJoinCostModel {
         return joinStatistics.getOutputSize(context.getRootProperty().getOutputColumns());
     }
 
-    /* Whether the current join method preserves the left-side distribution after the join. */
-    private boolean preservesLeftDistribution() {
-        if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2) {
-            return false;
-        }
-
-        final var leftSpec = inputProperties.get(0).getDistributionProperty().getSpec();
-        final var rightSpec = inputProperties.get(1).getDistributionProperty().getSpec();
-        return leftSpec.preservesLeftJoinSideDistribution(rightSpec);
+    private record JoinChildInfo(PhysicalPropertySet preservedSideInputProperty, ColumnRefSet preservedSideOutputColumns,
+                                 Group preservedSideGroup, PhysicalPropertySet otherSideInputProperty) {
     }
 
-    /* Whether we can actually preserve the left side distribution, based on the current join and the downstream distribution. */
-    private boolean couldPreserveLeftSideDistribution() {
-        if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2 || requiredProperty == null) {
+    private JoinChildInfo getJoinChildInfo() {
+        if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2) {
+            return null;
+        }
+
+        final var joinType = joinOperator.getJoinType();
+        if (joinType.isLeftTransform()) {
+            return new JoinChildInfo(inputProperties.get(0), context.getChildOutputColumns(0),
+                    getChildGroup(0), inputProperties.get(1));
+        }
+        if (joinType.isRightOuterJoin()) {
+            return new JoinChildInfo(inputProperties.get(1), context.getChildOutputColumns(1),
+                    getChildGroup(1), inputProperties.get(0));
+        }
+        return null;
+    }
+
+    private Group getChildGroup(int childIdx) {
+        if (!context.isGroupExprContext()) {
+            return null;
+        }
+        return context.getGroupExpression().inputAt(childIdx);
+    }
+
+    /* Whether the current join method preserves the selected child distribution after the join. */
+    private boolean preservesChildDistribution(JoinChildInfo joinChildInfo) {
+        final var childSpec = joinChildInfo.preservedSideInputProperty.getDistributionProperty().getSpec();
+        final var otherSpec = joinChildInfo.otherSideInputProperty.getDistributionProperty().getSpec();
+        return childSpec.preservesChildDistribution(otherSpec);
+    }
+
+    /* Whether we can actually preserve the child distribution, based on the current join and the downstream distribution. */
+    private boolean couldPreserveChildDistribution(JoinChildInfo joinChildInfo) {
+        if (requiredProperty == null) {
             return false;
         }
 
         // Join hints override the cost model's decision.
         String joinHint = joinOperator.getJoinHint();
         if (joinHint != null && !joinHint.isEmpty()) {
-            return false;
-        }
-
-        final var joinType = joinOperator.getJoinType();
-        if (!joinType.isLeftTransform()) {
             return false;
         }
 
@@ -196,22 +219,48 @@ public class HashJoinCostModel {
             return false;
         }
 
-        // Make sure downstream requires columns from the left-side that we could preserve.
-        if (!requiredDistributionUsesOnlyLeftChildColumns()) {
+        // Make sure downstream requires columns from the child side that we could preserve.
+        if (!requiredDistributionUsesOnlyChildColumns(joinChildInfo)) {
             return false;
         }
 
-        // We can satisfy that downstream requires the same distribution as the current left child.
-        return inputProperties.get(0).getDistributionProperty().isSatisfy(requiredDistribution);
+        return childGroupCanSatisfyRequiredDistribution(joinChildInfo, requiredDistribution);
     }
 
-    /* Whether the given required distribution only uses columns from the current join's left child. */
-    private boolean requiredDistributionUsesOnlyLeftChildColumns() {
+    /* Whether the given required distribution only uses columns from the selected join child. */
+    private boolean requiredDistributionUsesOnlyChildColumns(JoinChildInfo joinChildInfo) {
         final var requiredSpec = (HashDistributionSpec) requiredProperty.getDistributionProperty().getSpec();
-        final var leftColumns = context.getChildOutputColumns(0);
         return requiredSpec.getShuffleColumns().stream()
                 .map(DistributionCol::getColId)
-                .allMatch(leftColumns::contains);
+                .allMatch(joinChildInfo.preservedSideOutputColumns::contains);
+    }
+
+    /*
+     * The current input property may already be the join's own repartitioning requirement.
+     * Check the child's default output as well, so a repartition candidate can still be penalized
+     * when it destroys a distribution that a broadcast alternative would have preserved.
+     */
+    private boolean childGroupCanSatisfyRequiredDistribution(JoinChildInfo joinChildInfo,
+                                                             DistributionProperty requiredDistribution) {
+        if (joinChildInfo.preservedSideInputProperty.getDistributionProperty().isSatisfy(requiredDistribution)) {
+            return true;
+        }
+
+        if (joinChildInfo.preservedSideGroup == null) {
+            return false;
+        }
+
+        final var childBestExpr = joinChildInfo.preservedSideGroup.getBestExpression(PhysicalPropertySet.EMPTY);
+        if (childBestExpr == null) {
+            return false;
+        }
+
+        try {
+            return childBestExpr.getOutputProperty(PhysicalPropertySet.EMPTY)
+                    .getDistributionProperty().isSatisfy(requiredDistribution);
+        } catch (IllegalArgumentException | IllegalStateException ignored) {
+            return false;
+        }
     }
 
     private boolean joinOutputSatisfiesRequiredDistribution() {

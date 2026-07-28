@@ -54,10 +54,11 @@ public abstract class DistributionSpec {
     }
 
     /**
-     * Returns true if a join with this spec as the left input and {@code rightSpec}
-     * as the right input preserves the left input distribution in the join output.
+     * Returns true if a join with this spec as the child input to preserve and
+     * {@code otherSpec} as the opposite input preserves this child distribution
+     * in the join output.
      */
-    public abstract boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec);
+    public abstract boolean preservesChildDistribution(DistributionSpec otherSpec);
 
     public enum DistributionType {
         ANY,

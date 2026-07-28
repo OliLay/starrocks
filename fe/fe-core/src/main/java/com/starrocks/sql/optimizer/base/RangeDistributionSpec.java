@@ -126,11 +126,11 @@ public final class RangeDistributionSpec extends DistributionSpec {
     }
 
     @Override
-    public boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec) {
-        if (rightSpec.getType() == DistributionType.BROADCAST || rightSpec.getType() == DistributionType.GATHER) {
+    public boolean preservesChildDistribution(DistributionSpec otherSpec) {
+        if (otherSpec.getType() == DistributionType.BROADCAST || otherSpec.getType() == DistributionType.GATHER) {
             return true;
         }
-        return rightSpec instanceof RangeDistributionSpec;
+        return otherSpec instanceof RangeDistributionSpec;
     }
 
     /**

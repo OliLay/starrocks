@@ -148,18 +148,18 @@ public class HashDistributionSpec extends DistributionSpec {
     }
 
     @Override
-    public boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec) {
-        if (rightSpec.type == DistributionType.BROADCAST || rightSpec.type == DistributionType.GATHER) {
+    public boolean preservesChildDistribution(DistributionSpec otherSpec) {
+        if (otherSpec.type == DistributionType.BROADCAST || otherSpec.type == DistributionType.GATHER) {
             return true;
         }
 
-        if (!(rightSpec instanceof HashDistributionSpec)) {
+        if (!(otherSpec instanceof HashDistributionSpec)) {
             return false;
         }
 
-        HashDistributionDesc rightDesc = ((HashDistributionSpec) rightSpec).getHashDistributionDesc();
-        return (hashDistributionDesc.isLocal() && rightDesc.isLocal()) ||
-                (hashDistributionDesc.isLocal() && rightDesc.isBucketJoin());
+        HashDistributionDesc otherDesc = ((HashDistributionSpec) otherSpec).getHashDistributionDesc();
+        return (hashDistributionDesc.isLocal() && otherDesc.isLocal()) ||
+                (hashDistributionDesc.isLocal() && otherDesc.isBucketJoin());
     }
 
     public List<DistributionCol> getShuffleColumns() {
