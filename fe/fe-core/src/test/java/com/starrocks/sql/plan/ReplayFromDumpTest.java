@@ -751,9 +751,9 @@ public class ReplayFromDumpTest extends ReplayFromDumpTestBase {
     }
 
     @Test
-    public void testLocalAggDistributionMismatchBroadcastJoinFromDump() throws Exception {
+    public void testShuffleDestroyingDownstreamDistribution() throws Exception {
         // GIVEN
-        final var dumpString = getDumpInfoFromFile("query_dump/local_agg_distribution_mismatch_broadcast_join");
+        final var dumpString = getDumpInfoFromFile("query_dump/shuffle_destroying_downstream_distribution");
         final var queryDumpInfo = getDumpInfoFromJson(dumpString);
         // Validate that the input dump does not already contain a broadcast join hint
         Assertions.assertFalse(queryDumpInfo.getOriginStmt().contains("[BROADCAST]"));
