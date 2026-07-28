@@ -146,18 +146,28 @@ public class HashJoinCostModel {
     }
 
     public double getNetworkCost() {
-        JoinExecMode execMode = deriveJoinExecMode();
-        // Shuffle can destroy a distribution that broadcast would preserve. Hence, we penalize a shuffle if
-        // we could preserve the distribution through a broadcast instead.
-        if (JoinExecMode.SHUFFLE != execMode || !couldPreserveLeftSideDistribution()) {
+        // Redistribution can destroy a distribution that broadcast would preserve.
+        // We penalize redistribution if we can make use of the current distribution later on.
+        if (preservesLeftDistribution() || !couldPreserveLeftSideDistribution()) {
             return 0;
         }
 
-        if (!shuffleJoinOutputSatisfiesRequiredDistribution()) {
+        // Only penalize cases where we would destroy the upcoming required distribution.
+        if (!joinOutputSatisfiesRequiredDistribution()) {
             // Estimate the cost to restore the parent-required distribution after a shuffle destroys it.
             return joinStatistics.getOutputSize(context.getRootProperty().getOutputColumns());
         }
         return 0;
+    }
+
+    private boolean preservesLeftDistribution() {
+        if (CollectionUtils.isEmpty(inputProperties) || inputProperties.size() < 2) {
+            return false;
+        }
+
+        final var leftSpec = inputProperties.get(0).getDistributionProperty().getSpec();
+        final var rightSpec = inputProperties.get(1).getDistributionProperty().getSpec();
+        return leftSpec.preservesLeftJoinSideDistribution(rightSpec);
     }
 
     private boolean couldPreserveLeftSideDistribution() {
@@ -205,7 +215,7 @@ public class HashJoinCostModel {
                 .allMatch(leftColumns::contains);
     }
 
-    private boolean shuffleJoinOutputSatisfiesRequiredDistribution() {
+    private boolean joinOutputSatisfiesRequiredDistribution() {
         final var joinHelper = JoinHelper.of(joinOperator, context.getChildOutputColumns(0),
                 context.getChildOutputColumns(1));
         List<DistributionCol> leftJoinColumns = joinHelper.getLeftCols();

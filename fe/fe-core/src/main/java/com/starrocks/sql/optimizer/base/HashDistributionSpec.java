@@ -147,6 +147,21 @@ public class HashDistributionSpec extends DistributionSpec {
         return hashDistributionDesc.isSatisfy(other.hashDistributionDesc) || isJoinEqColumnsCompatible(other);
     }
 
+    @Override
+    public boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec) {
+        if (rightSpec.type == DistributionType.BROADCAST || rightSpec.type == DistributionType.GATHER) {
+            return true;
+        }
+
+        if (!(rightSpec instanceof HashDistributionSpec)) {
+            return false;
+        }
+
+        HashDistributionDesc rightDesc = ((HashDistributionSpec) rightSpec).getHashDistributionDesc();
+        return (hashDistributionDesc.isLocal() && rightDesc.isLocal()) ||
+                (hashDistributionDesc.isLocal() && rightDesc.isBucketJoin());
+    }
+
     public List<DistributionCol> getShuffleColumns() {
         return hashDistributionDesc.getDistributionCols();
     }

@@ -17,7 +17,7 @@ package com.starrocks.sql.optimizer.base;
 
 import com.starrocks.thrift.TDistributionType;
 
-public class DistributionSpec {
+public abstract class DistributionSpec {
     protected final DistributionType type;
     protected DistributionSpec(DistributionType type) {
         this.type = type;
@@ -52,6 +52,12 @@ public class DistributionSpec {
     public boolean isSatisfy(DistributionSpec spec) {
         return false;
     }
+
+    /**
+     * Returns true if a join with this spec as the left input and {@code rightSpec}
+     * as the right input preserves the left input distribution in the join output.
+     */
+    public abstract boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec);
 
     public enum DistributionType {
         ANY,

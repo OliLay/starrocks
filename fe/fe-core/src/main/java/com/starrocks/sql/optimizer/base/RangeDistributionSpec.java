@@ -125,6 +125,14 @@ public final class RangeDistributionSpec extends DistributionSpec {
         return false;
     }
 
+    @Override
+    public boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec) {
+        if (rightSpec.getType() == DistributionType.BROADCAST || rightSpec.getType() == DistributionType.GATHER) {
+            return true;
+        }
+        return rightSpec instanceof RangeDistributionSpec;
+    }
+
     /**
      * Structural compatibility check. Each spec owns its own
      * {@link EquivalentDescriptor} and the two are never merged, so

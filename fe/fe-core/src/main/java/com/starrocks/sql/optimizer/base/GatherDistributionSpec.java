@@ -38,6 +38,11 @@ public class GatherDistributionSpec extends DistributionSpec {
     }
 
     @Override
+    public boolean preservesLeftJoinSideDistribution(DistributionSpec rightSpec) {
+        return rightSpec.type == DistributionType.BROADCAST || rightSpec.type == DistributionType.GATHER;
+    }
+
+    @Override
     public int hashCode() {
         return Objects.hash(type);
     }
