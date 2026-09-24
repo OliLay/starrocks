@@ -553,6 +553,8 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
     public static final String BROADCAST_ROW_LIMIT = "broadcast_row_limit";
     public static final String BROADCAST_RIGHT_TABLE_SCALE_FACTOR =
             "broadcast_right_table_scale_factor";
+    public static final String BROADCAST_JOIN_MEM_EXCEED_PENALTY =
+            "broadcast_join_mem_exceed_penalty";
     public static final String NEW_PLANNER_OPTIMIZER_TIMEOUT = "new_planner_optimize_timeout";
     public static final String ENABLE_GROUPBY_USE_OUTPUT_ALIAS = "enable_groupby_use_output_alias";
     public static final String ENABLE_QUERY_DUMP = "enable_query_dump";
@@ -2016,6 +2018,9 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
 
     @VariableMgr.VarAttr(name = BROADCAST_RIGHT_TABLE_SCALE_FACTOR, flag = VariableMgr.INVISIBLE)
     private double broadcastRightTableScaleFactor = 10.0;
+
+    @VariableMgr.VarAttr(name = BROADCAST_JOIN_MEM_EXCEED_PENALTY, flag = VariableMgr.INVISIBLE)
+    private int broadcastJoinMemExceedPenalty = 1000;
 
     @VariableMgr.VarAttr(name = NEW_PLANNER_OPTIMIZER_TIMEOUT)
     private long optimizerExecuteTimeout = 3000;
@@ -4884,6 +4889,18 @@ public class SessionVariable implements Serializable, Writable, Cloneable {
 
     public double getBroadcastRightTableScaleFactor() {
         return broadcastRightTableScaleFactor;
+    }
+
+    public int getBroadcastJoinMemExceedPenalty() {
+        return broadcastJoinMemExceedPenalty;
+    }
+
+    public void setBroadcastJoinMemExceedPenalty(int broadcastJoinMemExceedPenalty) {
+        this.broadcastJoinMemExceedPenalty = broadcastJoinMemExceedPenalty;
+    }
+
+    public void setBroadcastRightTableScaleFactor(double scale) {
+        broadcastRightTableScaleFactor = scale;
     }
 
     public long getOptimizerExecuteTimeout() {

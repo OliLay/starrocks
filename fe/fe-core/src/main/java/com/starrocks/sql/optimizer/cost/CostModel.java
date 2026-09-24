@@ -62,7 +62,6 @@ import com.starrocks.sql.optimizer.skew.DataSkew;
 import com.starrocks.sql.optimizer.skew.DataSkewInfo;
 import com.starrocks.sql.optimizer.statistics.ColumnStatistic;
 import com.starrocks.sql.optimizer.statistics.Statistics;
-import com.starrocks.sql.optimizer.statistics.StatisticsEstimateCoefficient;
 import com.starrocks.statistic.StatisticUtils;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
@@ -431,7 +430,7 @@ public class CostModel {
                             outputSize * beNum,
                             Math.max(outputSize * beNum, 1));
                     if (outputSize > sessionVariable.getMaxExecMemByte()) {
-                        result = result.multiplyBy(StatisticsEstimateCoefficient.BROADCAST_JOIN_MEM_EXCEED_PENALTY);
+                        result = result.multiplyBy(sessionVariable.getBroadcastJoinMemExceedPenalty());
                     }
                     LOG.debug("beNum: {}, aliveBeNum: {}, outputSize: {}.", aliveBackendNumber, beNum, outputSize);
                     break;
